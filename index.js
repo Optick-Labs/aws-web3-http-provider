@@ -10,40 +10,7 @@ const AWS = require('aws-sdk');
 const HttpProvider = require('web3-providers-http');
 const XHR2 = require('xhr2');
 
-class SsmCredentials extends AWS.Credentials {
-  constructor(httpProvider) {
-    super();
-    this.httpProvider = httpProvider;
-  }
-
-  refresh(callback) {
-    if (!callback) callback = AWS.util.fn.callback;
-
-    if ('ssmCredentials' in this.httpProvider &&
-        this.httpProvider.ssmCredentials &&
-        'accessKeyId' in this.httpProvider.ssmCredentials &&
-        'secretAccessKey' in this.httpProvider.ssmCredentials) {
-      this.accessKeyId = this.httpProvider.ssmCredentials.accessKeyId;
-      this.secretAccessKey = this.httpProvider.ssmCredentials.secretAccessKey;
-    } else {
-      callback(AWS.util.error(
-        new Error('ssmCredentials not set'),
-        { code: 'SsmCredentialsProviderFailure' }
-      ))
-      return;
-    }
-  
-    this.expired = false;
-    callback();
-  }
-}
-
 module.exports = class AWSHttpProvider extends HttpProvider {
-  constructor(host, ssmCredentials) {
-    super(host)
-    this.ssmCredentials = ssmCredentials || {};
-  }
-
   send(payload, callback) {
     const self = this;
     const request = new XHR2(); // eslint-disable-line
@@ -79,12 +46,9 @@ module.exports = class AWSHttpProvider extends HttpProvider {
         `ms. (i.e. your connect has timed out for whatever reason, check your provider).`, null);
     };
 
-    const region = process.env.AWS_DEFAULT_REGION || 'us-east-1';
-
-    const chain = new AWS.CredentialProviderChain();
-    chain.providers.unshift(() => new SsmCredentials(this));
+    const region = 'us-east-1';
     
-    chain.resolve((err, credentials) => {
+    AWS.config.credentialProvider.resolve((err, credentials) => {
       if (err) {
         callback(`[aws-ethjs-provider-http] CONNECTION ERROR: Couldn't connect to node '${self.host}': missing AWS credentials. Check your environment variables using command 'echo $NODE_ENV' to verify credentials are set. ${err.message}`)
         return;
@@ -97,14 +61,15 @@ module.exports = class AWSHttpProvider extends HttpProvider {
         req.body = strPayload;
         req.headers['host'] = request._url.host;
         const signer = new AWS.Signers.V4(req, 'managedblockchain');
-        signer.addAuthorization(credentials, new Date());
+        signer.addAuthorization(credentials, AWS.util.date.getDate());
         request.setRequestHeader('Authorization', req.headers['Authorization']);
         request.setRequestHeader('X-Amz-Date', req.headers['X-Amz-Date']);
-        if (process.env.AWS_SESSION_TOKEN) {
-          request.setRequestHeader('X-Amz-Security-Token', process.env.AWS_SESSION_TOKEN);
+        if (process.env.AWS_SESSION_TOKEN || credentials.sessionToken) {
+          request.setRequestHeader('X-Amz-Security-Token', process.env.AWS_SESSION_TOKEN || credentials.sessionToken);
         }
         request.send(strPayload);
       } catch (error) {
+        console.error(error);
         callback(`[aws-ethjs-provider-http] CONNECTION ERROR: Couldn't connect to node '${self.host}': ` +
         `${JSON.stringify(error, null, 2)}`, null);
        }
